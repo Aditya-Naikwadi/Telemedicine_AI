@@ -1,4 +1,7 @@
 // Configuration types
+import { SecurityConfig } from './security.types';
+import { PerformanceConfig } from './performance.types';
+
 export interface TelemedAgentConfig {
     llm: LLMConfig;
     organization: OrganizationConfig;
@@ -8,6 +11,8 @@ export interface TelemedAgentConfig {
     scheduling?: SchedulingConfig;
     logging?: LoggingConfig;
     emergency?: EmergencyConfig;
+    security?: SecurityConfig;
+    performance?: PerformanceConfig;
 }
 
 export interface LLMConfig {

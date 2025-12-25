@@ -10,8 +10,18 @@ import { generateSystemPrompt, TOOL_DEFINITIONS } from './core';
 import {
     SymptomAssessmentService,
     EmergencyDetectionService,
+    SecurityValidatorService,
+    EncryptionService,
+    AuditLoggerService,
+    RateLimiterService,
+    PIIDetectorService,
+    CacheService,
+    CircuitBreakerService,
+    LoadBalancerService,
+    QueueService,
+    HealthMonitorService,
 } from './services';
-import { createLogger } from './utils';
+import { createLogger, SessionManager } from './utils';
 
 export class TelemedAgent {
     private config: TelemedAgentConfig;
@@ -21,6 +31,21 @@ export class TelemedAgent {
     private emergencyService: EmergencyDetectionService;
     private logger: any;
     private sessions: Map<string, ChatMessage[]>;
+
+    // Security services
+    private securityValidator: SecurityValidatorService;
+    private encryptionService?: EncryptionService;
+    private auditLogger: AuditLoggerService;
+    private rateLimiter: RateLimiterService;
+    private piiDetector: PIIDetectorService;
+    private sessionManager: SessionManager;
+
+    // Performance services
+    private cacheService: CacheService;
+    private circuitBreaker: CircuitBreakerService;
+    private loadBalancer?: LoadBalancerService;
+    private queueService: QueueService;
+    private healthMonitor: HealthMonitorService;
 
     constructor(config: Partial<TelemedAgentConfig>) {
         // Validate and merge config
@@ -45,6 +70,106 @@ export class TelemedAgent {
         this.symptomService = new SymptomAssessmentService();
         this.emergencyService = new EmergencyDetectionService();
 
+        // Initialize security services
+        this.securityValidator = new SecurityValidatorService();
+        this.auditLogger = new AuditLoggerService(
+            this.config.security?.auditLogging || {
+                enabled: true,
+                logLevel: 'standard',
+                retentionDays: 2555,
+                logPHIAccess: true,
+                logAuthEvents: true,
+                logSecurityEvents: true,
+                encryptLogs: false,
+            }
+        );
+        this.rateLimiter = new RateLimiterService(
+            this.config.security?.rateLimiting || {
+                enabled: true,
+                maxRequestsPerMinute: 60,
+                maxRequestsPerHour: 1000,
+                blockDurationMinutes: 15,
+                whitelistedSessions: [],
+            }
+        );
+        this.piiDetector = new PIIDetectorService(
+            this.config.security?.piiProtection || {
+                enabled: true,
+                autoDetect: true,
+                maskInLogs: true,
+                maskInResponses: false,
+                piiTypes: ['ssn', 'email', 'phone', 'dob', 'mrn', 'credit-card'],
+            }
+        );
+        this.sessionManager = new SessionManager(
+            this.config.security?.sessionManagement || {
+                sessionTimeout: 30,
+                requireTokenValidation: true,
+                maxConcurrentSessions: 5,
+                enforceIPValidation: false,
+            }
+        );
+
+        // Initialize encryption if enabled
+        if (this.config.security?.encryption?.enabled) {
+            this.encryptionService = new EncryptionService(
+                this.config.security.encryption
+            );
+        }
+
+        // Initialize performance services
+        this.cacheService = new CacheService(
+            this.config.performance?.caching || {
+                enabled: true,
+                type: 'memory',
+                ttl: 3600,
+                maxSize: 100,
+                strategy: 'lru',
+                keyPrefix: 'telemed',
+            }
+        );
+        this.circuitBreaker = new CircuitBreakerService(
+            this.config.performance?.circuitBreaker || {
+                enabled: true,
+                failureThreshold: 5,
+                successThreshold: 2,
+                timeout: 30000,
+                resetTimeout: 60000,
+                monitoringPeriod: 10000,
+            }
+        );
+        this.queueService = new QueueService(
+            this.config.performance?.queue || {
+                enabled: true,
+                maxSize: 1000,
+                strategy: 'priority',
+                timeout: 60000,
+                concurrency: 10,
+            }
+        );
+        this.healthMonitor = new HealthMonitorService(
+            this.config.performance?.monitoring || {
+                enabled: true,
+                metricsInterval: 60000,
+                healthCheckEndpoint: true,
+                detailedMetrics: false,
+                alertThresholds: {
+                    cpuUsage: 80,
+                    memoryUsage: 85,
+                    responseTime: 5000,
+                    errorRate: 5,
+                    queueSize: 800,
+                },
+            }
+        );
+
+        // Initialize load balancer if enabled
+        if (this.config.performance?.loadBalancing?.enabled) {
+            this.loadBalancer = new LoadBalancerService(
+                this.config.performance.loadBalancing
+            );
+        }
+
         // Initialize logger
         this.logger = createLogger(this.config.logging);
 
@@ -54,27 +179,135 @@ export class TelemedAgent {
         this.logger.info('TelemedAgent initialized', {
             organization: this.config.organization.name,
         });
+
+        // Log initialization
+        this.auditLogger.log(
+            'configuration-change',
+            'TelemedAgent initialized',
+            'system',
+            {
+                severity: 'low',
+                outcome: 'success',
+            }
+        );
     }
 
     async chat(request: ChatRequest): Promise<ChatResponse> {
         try {
+            // 1. Validate session
+            const sessionValidation = this.sessionManager.validateSession(
+                request.sessionId
+            );
+            if (!sessionValidation.isValid) {
+                this.auditLogger.logSecurityEvent(
+                    request.sessionId,
+                    'Invalid session attempt',
+                    'high',
+                    { reason: sessionValidation.reason }
+                );
+                throw new Error(`Session validation failed: ${sessionValidation.reason}`);
+            }
+
+            // 2. Check rate limiting
+            const rateLimitCheck = this.rateLimiter.checkRateLimit(
+                request.sessionId
+            );
+            if (!rateLimitCheck.allowed) {
+                this.auditLogger.log(
+                    'rate-limit-exceeded',
+                    'Request blocked due to rate limit',
+                    request.sessionId,
+                    {
+                        severity: 'medium',
+                        outcome: 'blocked',
+                    }
+                );
+                throw new Error(
+                    `Rate limit exceeded. Please try again in ${rateLimitCheck.retryAfter} seconds.`
+                );
+            }
+
+            // 3. Validate and sanitize input
+            const validationResult = SecurityValidatorService.validateSessionData({
+                sessionId: request.sessionId,
+                message: request.message,
+            });
+
+            if (!validationResult.isValid) {
+                this.auditLogger.log(
+                    'validation-failure',
+                    'Input validation failed',
+                    request.sessionId,
+                    {
+                        severity: 'medium',
+                        outcome: 'blocked',
+                        metadata: { errors: validationResult.errors },
+                    }
+                );
+                throw new Error(
+                    `Input validation failed: ${validationResult.errors.map((e) => e.message).join(', ')}`
+                );
+            }
+
+            // 4. Check for injection attempts
+            const injectionCheck = SecurityValidatorService.validateAgainstInjection(
+                request.message
+            );
+            if (!injectionCheck.isValid) {
+                this.auditLogger.logSecurityEvent(
+                    request.sessionId,
+                    'Injection attempt detected',
+                    'critical',
+                    { threats: injectionCheck.threats }
+                );
+                throw new Error('Security violation detected in input');
+            }
+
+            // 5. Detect and mask PII in logs
+            const piiDetection = this.piiDetector.detectPII(request.message);
+            const sanitizedMessage = validationResult.sanitizedData?.message || request.message;
+
+            // Log the request (with PII masked)
+            this.auditLogger.logDataAccess(
+                request.sessionId,
+                request.patientId || 'anonymous',
+                'chat',
+                'User message received',
+                piiDetection.hasPII
+            );
+
             // Get or create session
             let conversationHistory = this.sessions.get(request.sessionId) || [];
 
             // Add user message
             const userMessage: ChatMessage = {
                 role: 'user',
-                content: request.message,
+                content: sanitizedMessage,
                 timestamp: new Date(),
             };
             conversationHistory.push(userMessage);
 
             // Check for emergency keywords first
             const emergencyCheck = this.emergencyService.detectEmergency([
-                request.message,
+                sanitizedMessage,
             ]);
 
             if (emergencyCheck.isEmergency) {
+                // Log emergency detection
+                this.auditLogger.log(
+                    'emergency-event',
+                    'Emergency situation detected',
+                    request.sessionId,
+                    {
+                        severity: 'critical',
+                        outcome: 'success',
+                        metadata: {
+                            emergencyType: emergencyCheck.emergencyType,
+                            keywords: emergencyCheck.keywords,
+                        },
+                    }
+                );
+
                 const emergencyResponse = this.handleEmergency(emergencyCheck);
                 conversationHistory.push({
                     role: 'assistant',

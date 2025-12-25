@@ -1,2 +1,12 @@
-export * from './symptom-assessment.service';
-export * from './emergency-detection.service';
+export { SymptomAssessmentService } from './symptom-assessment.service';
+export { EmergencyDetectionService } from './emergency-detection.service';
+export { SecurityValidatorService } from './security-validator.service';
+export { EncryptionService } from './encryption.service';
+export { AuditLoggerService } from './audit-logger.service';
+export { RateLimiterService } from './rate-limiter.service';
+export { PIIDetectorService } from './pii-detector.service';
+export { CacheService } from './cache.service';
+export { CircuitBreakerService } from './circuit-breaker.service';
+export { LoadBalancerService } from './load-balancer.service';
+export { QueueService } from './queue.service';
+export { HealthMonitorService } from './health-monitor.service';
