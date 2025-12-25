@@ -1,0 +1,49 @@
+# Source files (TypeScript source is not needed in published package)
+src/
+*.ts
+!*.d.ts
+
+# Tests
+**/*.test.ts
+**/*.spec.ts
+coverage/
+jest.config.js
+
+# Development files
+.eslintrc.json
+.prettierrc
+tsconfig.json
+.gitignore
+
+# Documentation (keep README.md and LICENSE)
+examples/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.*
+
+# Build artifacts
+*.tsbuildinfo
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Temporary
+tmp/
+temp/
